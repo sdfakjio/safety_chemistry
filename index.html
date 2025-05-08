@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>화학 물질 MSDS 검색</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #camera-container {
+            width: 300px;
+            height: 225px;
+            border: 1px solid black;
+            margin-bottom: 10px;
+            position: relative;
+        }
+
+        #camera-view {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background-color: #eee;
+        }
+
+        #capture-btn,
+        #tts-btn {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+        }
+
+        #result {
+            margin-top: 20px;
+            font-weight: bold;
+        }
+
+        #msds-info {
+            margin-top: 10px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            width: 80%;
+            max-width: 500px;
+        }
+
+        #msds-info h2 {
+            margin-top: 0;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        #loading {
+            display: none;
+            margin-top: 20px;
+            font-style: italic;
+            color: gray;
+        }
+
+        #creator-info {
+            margin-top: 30px;
+            font-size: 0.8em;
+            color: #777;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>화학 물질 MSDS 검색</h1>
+
+    <p>NFC 태그를 스캔하여 이 페이지에 접속하셨습니다.</p>
+
+    <div id="camera-container">
+        <canvas id="camera-view"></canvas>
+    </div>
+    <div>
+        <button id="capture-btn">사진 촬영 및 검색</button>
+        <button id="tts-btn" class="hidden">MSDS 정보 음성으로 듣기</button>
+    </div>
+
+    <div id="loading">분석 중...</div>
+    <div id="result"></div>
+    <div id="msds-info" class="hidden">
+        <h2>MSDS 정보</h2>
+        <div id="msds-content"></div>
+    </div>
+
+    <div id="creator-info">
+        Made by 2025년 화학탐구실험반
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+    <script>
+        let cameraView = document.getElementById('camera-view');
+        let captureBtn = document.getElementById('capture-btn');
+        let ttsBtn = document.getElementById('tts-btn');
+        let resultDiv = document.getElementById('result');
+        let msdsInfoDiv = document.getElementById('msds-info');
+        let msdsContentDiv = document.getElementById('msds-content');
+        let loadingDiv = document.getElementById('loading');
+        let model;
+        let metadata;
+        let currentChemicalName = '';
+        let cameraStream;
+
+        const speechUtterance = new SpeechSynthesisUtterance();
+        speechUtterance.lang = 'ko-KR';
+        speechUtterance.rate = 0.9;
+        speechUtterance.pitch = 1;
+
+        // MSDS 데이터 (임시 - 실제로는 서버에서 가져와야 함)
+        const msdsData = {
+            "아세톤": { "위험성": "인화성 액체", "취급 주의": "화기 엄금, 통풍이 잘 되는 곳에 보관" },
+            "에탄올": { "위험성": "인화성 액체, 눈에 자극", "취급 주의": "밀폐 보관, 열과 스파크 피하기" },
+            "염산": { "위험성": "피부 부식성, 심한 눈 손상", "취급 주의": "보호 장비 착용, 환기된 곳에서 사용" }
+            // ... 더 많은 화학물질 데이터 추가
+        };
+
+        async function loadModel() {
+            try {
+                model = await tf.loadLayersModel('model.json');
+                const metadataJSON = await fetch('metadata.json');
+                metadata = await metadataJSON.json();
+                console.log('모델 및 메타데이터 로드 완료');
+            } catch (error) {
+                console.error('모델 로드 실패:', error);
+                resultDiv.innerText = '모델 로드에 실패했습니다.';
+            }
+        }
+
+        async function setupCamera() {
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                try {
+                    const constraints = {
+                        video: {
+                            facingMode: 'environment' // 기본적으로 후면 카메라를 사용
+                        }
+                    };
+                    //userAgent를 확인하여 mobile기기인지 확인하고, mobile일 경우에만 facingMode를 environment로 설정
+                    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+                         constraints.video.facingMode =  'environment';
+                    }
+                    else{
+                         constraints.video.facingMode =  'user';
+                    }
+                    cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+                    cameraView.width = 300;
+                    cameraView.height = 225;
+                    const context = cameraView.getContext('2d');
+
+
+                    function drawFrame() {
+                        if (cameraStream && cameraStream.active) {
+                            try{
+                                context.drawImage(cameraStream, 0, 0, cameraView.width, cameraView.height);
+                                requestAnimationFrame(drawFrame);
+                            }
+                            catch(e){
+                                console.log("error occured while drawing frame", e);
+                            }
+
+                        }
+                    }
+                    drawFrame();
+                } catch (error) {
+                    console.error('카메라 접근 실패:', error);
+                    resultDiv.innerText = '카메라 접근에 실패했습니다.';
+                     if (cameraStream) {
+                        cameraStream.getTracks().forEach(track => track.stop());
+                        cameraStream = null;
+                    }
+                }
+            } else {
+                resultDiv.innerText = '카메라를 지원하지 않는 환경입니다.';
+            }
+        }
+
+
+
+        captureBtn.addEventListener('click', async () => {
+            if (!model) {
+                resultDiv.innerText = '모델이 아직 로드되지 않았습니다.';
+                return;
+            }
+
+            loadingDiv.style.display = 'block';
+            resultDiv.innerText = '';
+            msdsInfoDiv.classList.add('hidden');
+            ttsBtn.classList.add('hidden');
+
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = cameraView.width;
+                canvas.height = cameraView.height;
+                const context = canvas.getContext('2d');
+                context.drawImage(cameraView, 0, 0, canvas.width, canvas.height);
+                const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+
+                const tensor = tf.browser.fromPixels(imageData).expandDims(0).toFloat();
+                const normalizedTensor = tensor.div(255);
+
+                const predictions = await model.predict(normalizedTensor).data();
+                const classNames = metadata ? metadata.labels : ['알 수 없음'];
+                const topPredictionIndex = Array.from(predictions).indexOf(Math.max(...predictions));
+                const predictedClassName = classNames[topPredictionIndex];
+                currentChemicalName = predictedClassName;
+
+                resultDiv.innerText = `예측 결과: ${predictedClassName}`;
+
+
+                if (msdsData[predictedClassName]) {
+                    msdsContentDiv.innerHTML = `
+                        <p><strong>위험성:</strong> ${msdsData[predictedClassName]['위험성']}</p>
+                        <p><strong>취급 주의:</strong> ${msdsData[predictedClassName]['취급 주의']}</p>
+                    `;
+                    msdsInfoDiv.classList.remove('hidden');
+                    ttsBtn.classList.remove('hidden');
+                } else {
+                    msdsContentDiv.innerText = '해당 화학물질의 MSDS 정보가 없습니다.';
+                    msdsInfoDiv.classList.remove('hidden');
+                    ttsBtn.classList.add('hidden'); // 정보 없을 땐 TTS 버튼 숨김
+                }
+            } catch (error) {
+                console.error("이미지 캡쳐 및 분석 오류:", error);
+                resultDiv.innerText = "이미지 캡쳐 및 분석 중 오류가 발생했습니다.  페이지를 새로고침해주세요.";
+            } finally {
+                loadingDiv.style.display = 'none'; // 에러가 발생하더라도 로딩 표시는 숨김
+            }
+        });
+
+        ttsBtn.addEventListener('click', () => {
+            if (!msdsInfoDiv.classList.contains('hidden')) {
+                let textToSpeak = `${currentChemicalName}의 MSDS 정보입니다. `;
+                const hazardElement = msdsContentDiv.querySelector('p:nth-child(1)');
+                const precautionElement = msdsContentDiv.querySelector('p:nth-child(2)');
+
+                if (hazardElement) {
+                    textToSpeak += `${hazardElement.innerText}. `;
+                }
+                if (precautionElement) {
+                    textToSpeak += `${precautionElement.innerText}.`;
+                }
+
+                speechUtterance.text = textToSpeak;
+                speechSynthesis.speak(speechUtterance);
+            } else {
+                alert('MSDS 정보가 먼저 표시되어야 음성으로 들을 수 있습니다.');
+            }
+        });
+
+        window.onload = async () => {
+            await loadModel();
+            await setupCamera();
+        };
+
+        window.addEventListener('beforeunload', () => {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraStream = null;
+            }
+        });
+    </script>
+</body>
+</html>
