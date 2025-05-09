@@ -10,50 +10,47 @@
             align-items: center;
         }
 
-        #webcam-container {
+        #camera-container {
             width: 300px;
             height: 225px;
             border: 1px solid black;
             margin-bottom: 10px;
             position: relative;
-            /* background-color: #eee; */ /* 필요에 따라 배경색 설정 */
         }
 
-        #webcam-container canvas {
+        #camera-view {
             display: block;
             width: 100%;
             height: 100%;
+            background-color: #eee;
         }
 
-        #label-container {
+        #capture-btn,
+        #tts-btn {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+        }
+
+        #result {
             margin-top: 20px;
             font-weight: bold;
-            font-size: 18px;
-            color: #222;
-            text-align: center;
         }
 
         #msds-info {
-            margin-top: 20px;
-            padding: 15px;
+            margin-top: 10px;
             border: 1px solid #ccc;
-            border-radius: 8px;
+            padding: 10px;
             width: 80%;
             max-width: 500px;
-            background-color: #fff;
-            line-height: 1.6;
-            display: none; /* 초기 숨김 상태 */
         }
 
         #msds-info h2 {
             margin-top: 0;
-            color: #1a5298;
-            border-bottom: 2px solid #ddd;
-            padding-bottom: 10px;
         }
 
-        #msds-info p {
-            margin-bottom: 10px;
+        .hidden {
+            display: none;
         }
 
         #loading {
@@ -61,68 +58,53 @@
             margin-top: 20px;
             font-style: italic;
             color: gray;
-            font-size: 16px;
         }
 
         #creator-info {
             margin-top: 30px;
-            font-size: 0.9em;
-            color: #555;
+            font-size: 0.8em;
+            color: #777;
             text-align: center;
-            padding: 10px;
-            border-top: 1px solid #eee;
-            width: 100%;
-        }
-
-        #tts-btn {
-            padding: 10px 20px;
-            margin: 10px 0;
-            cursor: pointer;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            font-size: 16px;
-            display: none; /* Initially hidden */
-        }
-
-        #tts-btn:hover {
-            background-color: #45a049;
         }
     </style>
 </head>
 <body>
     <h1>화학 물질 MSDS 검색</h1>
+
     <p>NFC 태그를 스캔하여 이 페이지에 접속하셨습니다.</p>
 
-    <div id="webcam-container"></div>
-    <div id="label-container"></div>
-    <button type="button" onclick="init()">Start</button>
-    <button id="tts-btn" class="hidden">MSDS 정보 음성으로 듣기</button>
+    <div id="camera-container">
+        <canvas id="camera-view"></canvas>
+    </div>
+    <div>
+        <button id="capture-btn">사진 촬영 및 검색</button>
+        <button id="tts-btn" class="hidden">MSDS 정보 음성으로 듣기</button>
+    </div>
 
     <div id="loading">분석 중...</div>
     <div id="result"></div>
-    <div id="msds-info">
+    <div id="msds-info" class="hidden">
         <h2>MSDS 정보</h2>
         <div id="msds-content"></div>
     </div>
 
     <div id="creator-info">
-        Made by 박박박
+        Made by 2025년 화학탐구실험반
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
-    <script type="text/javascript">
-        // More API functions here:
-        // https://github.com/googlecreativelab/teachablemachine-community/tree/master/libraries/image
-
-        // the link to your model provided by Teachable Machine export panel
-        const URL = "{{URL}}"; // 여기에 티처블 머신 모델 URL을 넣으세요
-
-        let model, webcam, labelContainer, maxPredictions;
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+    <script>
+        let cameraView = document.getElementById('camera-view');
+        let captureBtn = document.getElementById('capture-btn');
+        let ttsBtn = document.getElementById('tts-btn');
+        let resultDiv = document.getElementById('result');
+        let msdsInfoDiv = document.getElementById('msds-info');
+        let msdsContentDiv = document.getElementById('msds-content');
+        let loadingDiv = document.getElementById('loading');
+        let model;
+        let metadata;
         let currentChemicalName = '';
-        let cameraStream = null;
+        let cameraStream;
 
         const speechUtterance = new SpeechSynthesisUtterance();
         speechUtterance.lang = 'ko-KR';
@@ -137,95 +119,132 @@
             // ... 더 많은 화학물질 데이터 추가
         };
 
-        // Load the image model and setup the webcam
-        async function init() {
-            const modelURL = URL + "model.json";
-            const metadataURL = URL + "metadata.json";
-
-            // load the model and metadata
-            // Refer to tmImage.loadFromFiles() in the API to support files from a file picker
-            // or files from your local hard drive
-            // Note: the pose library adds "tmImage" object to your window (window.tmImage)
+        async function loadModel() {
             try {
-                model = await tmImage.load(modelURL, metadataURL);
-                maxPredictions = model.getTotalClasses();
-
-                // Convenience function to setup a webcam
-                const flip = true; // whether to flip the webcam
-                webcam = new tmImage.Webcam(300, 225, flip); // width, height, flip
-                await webcam.setup(); // request access to the webcam
-                await webcam.play();
-                window.requestAnimationFrame(loop);
-
-                // append elements to the DOM
-                document.getElementById("webcam-container").appendChild(webcam.canvas);
-                labelContainer = document.getElementById("label-container");
-                labelContainer.innerHTML = ''; // Clear existing labels
-                for (let i = 0; i < maxPredictions; i++) { // and class labels
-                    labelContainer.appendChild(document.createElement("div"));
-                }
-
-                // Hide the start button after成功
-                document.querySelector('button[onclick="init()"]').style.display = 'none';
-                document.getElementById('tts-btn').classList.add('hidden');
-                document.getElementById('msds-info').classList.add('hidden');
-                document.getElementById('result').innerText = '';
-
+                model = await tf.loadLayersModel('model.json');
+                const metadataJSON = await fetch('metadata.json');
+                metadata = await metadataJSON.json();
+                console.log('모델 및 메타데이터 로드 완료');
             } catch (error) {
-                console.error('Failed to initialize Teachable Machine:', error);
-                document.getElementById('result').innerText = 'Failed to initialize Teachable Machine. Please check the console for errors.';
+                console.error('모델 로드 실패:', error);
+                resultDiv.innerText = '모델 로드에 실패했습니다.';
             }
         }
 
-        async function loop() {
-            if (webcam && webcam.webcam) {
-                webcam.update(); // update the webcam frame
-                await predict();
-                window.requestAnimationFrame(loop);
-            }
-        }
+        async function setupCamera() {
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                try {
+                    const constraints = {
+                        video: {
+                            facingMode: 'environment' // 기본적으로 후면 카메라를 사용
+                        }
+                    };
+                    //userAgent를 확인하여 mobile기기인지 확인하고, mobile일 경우에만 facingMode를 environment로 설정
+                    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+                         constraints.video.facingMode =  'environment';
+                    }
+                    else{
+                         constraints.video.facingMode =  'user';
+                    }
+                    cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+                    cameraView.width = 300;
+                    cameraView.height = 225;
+                    const context = cameraView.getContext('2d');
 
-        // run the webcam image through the image model
-        async function predict() {
-            if (!model) return;
-            const prediction = await model.predict(webcam.canvas);
-            let highestProbability = 0;
-            let predictedClass = "";
-            for (let i = 0; i < maxPredictions; i++) {
-                const classPrediction = prediction[i].className + ": " + prediction[i].probability.toFixed(2);
-                labelContainer.childNodes[i].innerHTML = classPrediction;
-                if (prediction[i].probability > highestProbability) {
-                    highestProbability = prediction[i].probability;
-                    predictedClass = prediction[i].className;
+
+                    function drawFrame() {
+                        if (cameraStream && cameraStream.active) {
+                            try{
+                                context.drawImage(cameraStream, 0, 0, cameraView.width, cameraView.height);
+                                requestAnimationFrame(drawFrame);
+                            }
+                            catch(e){
+                                console.log("error occured while drawing frame", e);
+                            }
+
+                        }
+                    }
+                    drawFrame();
+                } catch (error) {
+                    console.error('카메라 접근 실패:', error);
+                    let errorMessage = '카메라 접근에 실패했습니다.';
+                    if (error.name === 'NotAllowedError') {
+                        errorMessage += ' 카메라 사용 권한이 없습니다. 브라우저 설정에서 확인해주세요.';
+                    } else if (error.name === 'NotFoundError') {
+                        errorMessage += ' 카메라를 찾을 수 없습니다. 장치가 연결되어 있는지 확인해주세요.';
+                    } else {
+                        errorMessage += ' 알 수 없는 오류가 발생했습니다. 페이지를 새로고침하거나, 다른 브라우저를 사용해보세요.';
+                    }
+                    resultDiv.innerText = errorMessage;
+                     if (cameraStream) {
+                        cameraStream.getTracks().forEach(track => track.stop());
+                        cameraStream = null;
+                    }
                 }
-            }
-            currentChemicalName = predictedClass;
-            document.getElementById('result').innerText = `예측 결과: ${predictedClass}`;
-
-            // Show MSDS info
-            const msdsInfoDiv = document.getElementById('msds-info');
-            const msdsContentDiv = document.getElementById('msds-content');
-            const ttsButton = document.getElementById('tts-btn');
-
-            if (msdsData[predictedClass]) {
-                msdsContentDiv.innerHTML = `
-                    <p><strong>위험성:</strong> ${msdsData[predictedClass]['위험성']}</p>
-                    <p><strong>취급 주의:</strong> ${msdsData[predictedClass]['취급 주의']}</p>
-                `;
-                msdsInfoDiv.classList.remove('hidden');
-                ttsButton.classList.remove('hidden');
             } else {
-                msdsContentDiv.innerText = '해당 화학물질의 MSDS 정보가 없습니다.';
-                msdsInfoDiv.classList.remove('hidden');
-                ttsButton.classList.add('hidden'); // Hide TTS button
+                resultDiv.innerText = '카메라를 지원하지 않는 환경입니다.';
             }
         }
 
-        document.getElementById('tts-btn').addEventListener('click', () => {
-            if (!document.getElementById('msds-info').classList.contains('hidden')) {
+
+
+        captureBtn.addEventListener('click', async () => {
+            if (!model) {
+                resultDiv.innerText = '모델이 아직 로드되지 않았습니다.';
+                return;
+            }
+
+            loadingDiv.style.display = 'block';
+            resultDiv.innerText = '';
+            msdsInfoDiv.classList.add('hidden');
+            ttsBtn.classList.add('hidden');
+
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = cameraView.width;
+                canvas.height = cameraView.height;
+                const context = canvas.getContext('2d');
+                context.drawImage(cameraView, 0, 0, canvas.width, canvas.height);
+                const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+
+                const tensor = tf.browser.fromPixels(imageData).expandDims(0).toFloat();
+                const normalizedTensor = tensor.div(255);
+
+                const predictions = await model.predict(normalizedTensor).data();
+                const classNames = metadata ? metadata.labels : ['알 수 없음'];
+                const topPredictionIndex = Array.from(predictions).indexOf(Math.max(...predictions));
+                const predictedClassName = classNames[topPredictionIndex];
+                currentChemicalName = predictedClassName;
+
+                resultDiv.innerText = `예측 결과: ${predictedClassName}`;
+
+
+                if (msdsData[predictedClassName]) {
+                    msdsContentDiv.innerHTML = `
+                        <p><strong>위험성:</strong> ${msdsData[predictedClassName]['위험성']}</p>
+                        <p><strong>취급 주의:</strong> ${msdsData[predictedClassName]['취급 주의']}</p>
+                    `;
+                    msdsInfoDiv.classList.remove('hidden');
+                    ttsBtn.classList.remove('hidden');
+                } else {
+                    msdsContentDiv.innerText = '해당 화학물질의 MSDS 정보가 없습니다.';
+                    msdsInfoDiv.classList.remove('hidden');
+                    ttsBtn.classList.add('hidden'); // 정보 없을 땐 TTS 버튼 숨김
+                }
+            } catch (error) {
+                console.error("이미지 캡쳐 및 분석 오류:", error);
+                resultDiv.innerText = "이미지 캡쳐 및 분석 중 오류가 발생했습니다.  페이지를 새로고침해주세요.";
+            } finally {
+                loadingDiv.style.display = 'none'; // 에러가 발생하더라도 로딩 표시는 숨김
+            }
+        });
+
+        ttsBtn.addEventListener('click', () => {
+            if (!msdsInfoDiv.classList.contains('hidden')) {
                 let textToSpeak = `${currentChemicalName}의 MSDS 정보입니다. `;
-                const hazardElement = document.getElementById('msds-content').querySelector('p:nth-child(1)');
-                const precautionElement = document.getElementById('msds-content').querySelector('p:nth-child(2)');
+                const hazardElement = msdsContentDiv.querySelector('p:nth-child(1)');
+                const precautionElement = msdsContentDiv.querySelector('p:nth-child(2)');
 
                 if (hazardElement) {
                     textToSpeak += `${hazardElement.innerText}. `;
@@ -241,10 +260,15 @@
             }
         });
 
-        // 페이지를 벗어날 때 카메라 스트림 중지
+        window.onload = async () => {
+            await loadModel();
+            await setupCamera();
+        };
+
         window.addEventListener('beforeunload', () => {
-            if (webcam && webcam.webcam) {
-                webcam.stop();
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => track.stop());
+                cameraStream = null;
             }
         });
     </script>
